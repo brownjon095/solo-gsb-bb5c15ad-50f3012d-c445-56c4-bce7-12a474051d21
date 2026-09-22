@@ -19,7 +19,43 @@ const state = {
     resources: [],
     plan: null,
   },
+  disposition: {        // 冲突处置工作台
+    analysisId: null,
+    analysisName: '',
+    items: [],          // 与分析结果冲突同序、含处置字段的视图
+    summary: null,
+    filter: 'all',
+  },
 };
+
+// 处置状态展示配置（待处理 / 已确认 / 已解决）
+const DISP_STATUS = {
+  pending: { label: '待处理', short: '待处理' },
+  confirmed: { label: '已确认', short: '已确认' },
+  resolved: { label: '已解决', short: '已解决' },
+};
+
+/**
+ * 稳定的区域对键：与后端 src/compare.js#pairKey 保持一致（id 排序后用 :: 拼接）。
+ * conflict-N 编号会随重新分析漂移，工作台改用区域对键关联处置状态。
+ */
+function pairKeyOfConflict(c) {
+  const ids = [...new Set((c?.zones || []).map((z) => z?.id != null ? String(z.id) : null).filter(Boolean))];
+  if (ids.length !== 2) return null;
+  return [...ids].sort().join('::');
+}
+
+/** ISO 时间 -> datetime-local 输入框值（本地时区，精确到分钟） */
+function toLocalInputValue(iso) {
+  const d = iso ? new Date(iso) : new Date();
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function fmtDateTime(iso) {
+  return iso ? new Date(iso).toLocaleString('zh-CN') : '-';
+}
 
 // 冲突类型展示配置
 const CONFLICT_TYPES = {
@@ -379,6 +415,8 @@ async function runAnalysis() {
   try {
     const result = await api('/api/analyze', { method: 'POST', body: JSON.stringify(body) });
     state.lastResult = result;
+    // 新分析结果与已保存分析不再是同一上下文，关闭基于旧分析的处置工作台
+    if (state.disposition.analysisId) closeDisposition();
     resetClusterView();
     renderConflicts(result);
   } catch (err) {
@@ -650,10 +688,14 @@ async function refreshAnalyses() {
       ? `（空间 ${a.conflictCountByType.spatial} / 资源 ${a.conflictCountByType.resource} / 空间+资源 ${a.conflictCountByType.both}）`
       : '';
     const clusterInfo = a.clusterCount ? ` · ${a.clusterCount} 个协调集群` : '';
+    const ds = a.dispositionSummary;
+    const dispInfo = ds && ds.total
+      ? `<span class="disp-progress" title="处置进度（待处理 / 已确认 / 已解决）"> · 处置：已确认 ${ds.confirmed} / 已解决 ${ds.resolved} / 待处理 ${ds.pending}</span>`
+      : '';
     li.innerHTML = `
       <span>
         <strong>${escapeHtml(a.name)}</strong>
-        <div class="meta">${new Date(a.savedAt).toLocaleString('zh-CN')} · ${a.conflictCount} 处冲突${typeInfo}${clusterInfo} · ${fmtArea(a.totalConflictAreaM2)}</div>
+        <div class="meta">${new Date(a.savedAt).toLocaleString('zh-CN')} · ${a.conflictCount} 处冲突${typeInfo}${clusterInfo} · ${fmtArea(a.totalConflictAreaM2)}${dispInfo}</div>
       </span>`;
     const btns = document.createElement('span');
     btns.className = 'row';
@@ -680,15 +722,22 @@ async function refreshAnalyses() {
     sched.title = '共享资源错峰排程：选择资源与可用数量，生成不超容量的连续安排';
     sched.onclick = () => openSchedule(a.id, a.name);
 
+    const disp = document.createElement('button');
+    disp.className = 'small disp-btn';
+    disp.textContent = '处置';
+    disp.title = '打开冲突处置工作台：按区域对标记待处理 / 已确认 / 已解决并填写批注';
+    disp.onclick = () => openDisposition(a.id, a.name);
+
     const del = document.createElement('button');
     del.className = 'danger small';
     del.textContent = '删除';
     del.onclick = async () => {
       await api(`/api/analyses/${a.id}`, { method: 'DELETE' });
+      if (state.disposition.analysisId === a.id) closeDisposition();
       await refreshAnalyses();
     };
 
-    btns.append(view, exp, sched, del);
+    btns.append(view, exp, sched, disp, del);
     li.appendChild(btns);
     list.appendChild(li);
   }
@@ -1084,6 +1133,188 @@ function renderSchedule(plan) {
   box.appendChild(table);
 }
 
+// ---------- 冲突处置工作台 ----------
+
+const DISP_STORAGE_OPERATOR = 'dispOperator';
+
+/**
+ * 打开处置工作台：同时在主视图复现该分析（冲突列表 + 地图），
+ * 再拉取按区域对关联的处置状态；重新打开时状态与批注自动恢复。
+ */
+async function openDisposition(analysisId, analysisName) {
+  const card = $('dispositionCard');
+  card.hidden = false;
+  card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  state.disposition = { analysisId, analysisName, items: [], summary: null, filter: 'all' };
+  $('dispositionAnalysisName').textContent = analysisName;
+  $('dispositionSummary').textContent = '加载中…';
+  $('dispositionList').innerHTML = '<em>正在加载处置数据…</em>';
+  $('dispositionMsg').textContent = '';
+  $('dispositionMsg').className = 'msg';
+  if (!$('dispositionOperator').value) {
+    $('dispositionOperator').value = localStorage.getItem(DISP_STORAGE_OPERATOR) || '';
+  }
+  document.querySelectorAll('#dispositionTabs .disp-tab').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.status === 'all');
+  });
+
+  // 主视图复现该分析（便于对照冲突列表与地图定位）
+  let record;
+  try {
+    record = await api(`/api/analyses/${analysisId}`);
+  } catch (err) {
+    showMsg($('dispositionMsg'), err.message, false);
+    $('dispositionList').innerHTML = '';
+    return;
+  }
+  state.lastResult = record.result;
+  resetClusterView();
+  renderConflicts(record.result);
+
+  try {
+    const view = await api(`/api/analyses/${analysisId}/dispositions`);
+    state.disposition.items = view.items;
+    state.disposition.summary = view.summary;
+    renderDisposition();
+  } catch (err) {
+    $('dispositionList').innerHTML = '';
+    showMsg($('dispositionMsg'), err.message, false);
+  }
+}
+
+function closeDisposition() {
+  $('dispositionCard').hidden = true;
+  state.disposition = { analysisId: null, analysisName: '', items: [], summary: null, filter: 'all' };
+}
+
+function renderDisposition() {
+  const { items, summary, filter } = state.disposition;
+  $('dispositionAnalysisName').textContent = state.disposition.analysisName;
+
+  if (summary) {
+    $('dispositionSummary').textContent =
+      `共 ${summary.total} 处 · 待处理 ${summary.pending} · 已确认 ${summary.confirmed} · 已解决 ${summary.resolved}`;
+    const counts = { all: summary.total, pending: summary.pending, confirmed: summary.confirmed, resolved: summary.resolved };
+    document.querySelectorAll('#dispositionTabs .tab-count').forEach((el) => {
+      el.textContent = counts[el.dataset.count] ?? 0;
+    });
+  }
+  document.querySelectorAll('#dispositionTabs .disp-tab').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.status === filter);
+  });
+
+  const box = $('dispositionList');
+  box.innerHTML = '';
+  const visible = filter === 'all' ? items : items.filter((it) => it.status === filter);
+  if (!items.length) {
+    box.innerHTML = '<em>该分析没有冲突，无需处置。</em>';
+    return;
+  }
+  if (!visible.length) {
+    box.innerHTML = `<em>当前状态筛选下没有冲突（${DISP_STATUS[filter]?.label || filter}）。</em>`;
+    return;
+  }
+
+  visible.forEach((it) => {
+    const fullIndex = items.findIndex((x) => x.pairKey === it.pairKey);
+    box.appendChild(buildDispositionItem(it, fullIndex));
+  });
+}
+
+function buildDispositionItem(it, index) {
+  const item = document.createElement('div');
+  item.className = `disp-item st-${it.status}`;
+  item.dataset.pairKey = it.pairKey || '';
+
+  const typeInfo = CONFLICT_TYPES[it.conflictType] || CONFLICT_TYPES.spatial;
+  const pairHtml = (it.zones || [])
+    .map((z) => `<span class="tag">${escapeHtml(z.name)}（${escapeHtml(z.layer || '')}）</span>`)
+    .join(' <span class="pair-x">×</span> ');
+  const resTags = (it.sharedResources || []).length
+    ? `共享资源：${it.sharedResources.map((r) => `<span class="tag resource">${escapeHtml(r)}</span>`).join(' ')}<br>`
+    : '';
+  const areaLine = it.geometry ? `重叠面积 ${fmtArea(it.areaM2)}` : '无空间相交（仅资源冲突）';
+  const history = Array.isArray(it.history) ? it.history : [];
+  const historyHtml = history.length
+    ? `<details class="disp-history">
+         <summary>处置记录（${history.length} 条）</summary>
+         <ol>${history.map((h) => {
+           const st = DISP_STATUS[h.status]?.label || h.status;
+           const who = h.operator ? escapeHtml(h.operator) : '未署名';
+           const note = h.comment ? ` 批注：${escapeHtml(h.comment)}` : '';
+           return `<li>${fmtDateTime(h.at)} · ${who} · ${escapeHtml(st)}${note}</li>`;
+         }).join('')}</ol>
+       </details>`
+    : '';
+
+  item.innerHTML = `
+    <div class="disp-head">
+      <div class="disp-pair">
+        <span class="type-badge" style="background:${typeInfo.color}">${typeLabel(it.conflictType)}</span>
+        ${pairHtml}
+      </div>
+      <span class="disp-status-pill st-${it.status}">${DISP_STATUS[it.status]?.label || it.status}</span>
+    </div>
+    <div class="disp-meta">
+      #${index + 1} ${areaLine}<br>
+      ${resTags}重叠时段：${fmtDate(it.overlapStart)} ~ ${fmtDate(it.overlapEnd)}（${it.overlapDays ?? '-'} 天）
+      <br>最近更新：${fmtDateTime(it.updatedAt)}${it.operator ? ` · ${escapeHtml(it.operator)}` : ''}
+    </div>
+    <div class="disp-edit">
+      <span class="disp-status-buttons">
+        <button type="button" class="disp-status-btn sel-pending ${it.status === 'pending' ? 'sel' : ''}" data-status="pending">🕓 待处理</button>
+        <button type="button" class="disp-status-btn sel-confirmed ${it.status === 'confirmed' ? 'sel' : ''}" data-status="confirmed">🔎 已确认</button>
+        <button type="button" class="disp-status-btn sel-resolved ${it.status === 'resolved' ? 'sel' : ''}" data-status="resolved">✅ 已解决</button>
+      </span>
+      <textarea class="disp-comment" rows="2" maxlength="2000" placeholder="填写批注（如处置方式、责任人、复核结论）">${escapeHtml(it.comment || '')}</textarea>
+      <span class="disp-time">更新时间
+        <input type="datetime-local" class="disp-updated-at" value="${escapeHtml(toLocalInputValue(it.updatedAt))}" />
+      </span>
+      <button type="button" class="primary disp-save">保存</button>
+    </div>
+    ${historyHtml}`;
+
+  // 切换状态按钮：仅更新本地选择态，并把更新时间预置为当前时刻（操作者仍可手工修改）
+  let chosenStatus = it.status;
+  item.querySelectorAll('.disp-status-btn').forEach((btn) => {
+    btn.onclick = () => {
+      chosenStatus = btn.dataset.status;
+      item.querySelectorAll('.disp-status-btn').forEach((b) => b.classList.toggle('sel', b === btn));
+      if (!item.querySelector('.disp-updated-at').value) {
+        item.querySelector('.disp-updated-at').value = toLocalInputValue(null);
+      }
+    };
+  });
+
+  item.querySelector('.disp-save').onclick = async () => {
+    const comment = item.querySelector('.disp-comment').value;
+    const updatedAtLocal = item.querySelector('.disp-updated-at').value;
+    const updatedAt = updatedAtLocal ? new Date(updatedAtLocal).toISOString() : new Date().toISOString();
+    const operator = $('dispositionOperator').value.trim();
+    if (operator) localStorage.setItem(DISP_STORAGE_OPERATOR, operator);
+    const btn = item.querySelector('.disp-save');
+    btn.disabled = true;
+    try {
+      const res = await api(`/api/analyses/${state.disposition.analysisId}/dispositions`, {
+        method: 'PUT',
+        body: JSON.stringify({ pairKey: it.pairKey, status: chosenStatus, comment, operator, updatedAt }),
+      });
+      // 用服务端返回的最新视图条目原地替换，保留筛选状态
+      const idx = state.disposition.items.findIndex((x) => x.pairKey === it.pairKey);
+      if (idx >= 0) state.disposition.items[idx] = res.entry;
+      state.disposition.summary = res.summary;
+      renderDisposition();
+      refreshAnalyses(); // 同步列表中的处置进度
+      showMsg($('dispositionMsg'), '处置已保存', true);
+    } catch (err) {
+      btn.disabled = false;
+      showMsg($('dispositionMsg'), `保存失败：${err.message}`, false);
+    }
+  };
+
+  return item;
+}
+
 // ---------- 事件绑定 ----------
 $('precheckBtn').onclick = () => runPrecheck($('geojsonInput').value.trim());
 
@@ -1192,6 +1423,18 @@ $('scheduleCapacity').onchange = () => {
 $('scheduleCloseBtn').onclick = () => {
   $('scheduleCard').hidden = true;
   state.schedule = { analysisId: null, analysisName: '', resources: [], plan: null };
+};
+
+// 冲突处置工作台
+$('dispositionCloseBtn').onclick = closeDisposition;
+document.querySelectorAll('#dispositionTabs .disp-tab').forEach((btn) => {
+  btn.onclick = () => {
+    state.disposition.filter = btn.dataset.status;
+    if (state.disposition.analysisId) renderDisposition();
+  };
+});
+$('dispositionOperator').onchange = (e) => {
+  localStorage.setItem(DISP_STORAGE_OPERATOR, e.target.value.trim());
 };
 
 // ---------- 启动 ----------

@@ -11,6 +11,7 @@
 - **冲突协调集群**：每次分析后，以区域为节点、冲突为无向边（同一对区域即使存在多类型冲突也只产生一条边），按连通分量生成仅含两个及以上区域的集群；用 **Tarjan 割点算法**识别关键区域（移除后集群会分裂）。每个集群返回区域/冲突 ID、冲突类型计数、累计重叠天数与关键区域列表，集群按冲突数降序、最小区域 ID 稳定排序
 - **结果筛选与建议**：按冲突类型（空间 / 资源 / 空间+资源）筛选结果列表；点击集群卡片可联动过滤冲突列表与地图，关键区域在地图上以金色虚线 + 菱形标记独立呈现，可一键恢复全量视图；每处冲突给出"顺延 / 提前 / 工序穿插"建议，涉及共享资源时额外给出"资源错峰 / 分时复用 / 增配资源"建议（含具体调整日期与天数）
 - **共享资源错峰排程**：在已保存分析中选择一种共享资源并设置可用数量（默认 1），系统按各区域原定工期与该资源的重叠关系做**不超容量的连续安排**（贪心列表调度：工期不变、只准延后、按时序把每个区域放到最早可行开工点）。输出每个参与区域的建议起止日期、延后天数与受影响冲突；容量 > 1 时允许部分冲突在容量内并行（标注排程后重叠）。结果页可按资源查看（时间轴 + 明细表）并**导出排程 JSON**。排程为纯计算结果，**不修改原区域或分析结果、不落库**；该资源无相关冲突时返回空计划
+- **冲突处置工作台**：在已保存分析上按**稳定的区域对**（区域 id 排序拼接的稳定键，不依赖会漂移的 `conflict-N` 编号）逐条展示冲突，可标记 **待处理 / 已确认 / 已解决** 并填写批注、署名操作者、指定更新时间；支持按状态筛选与汇总计数。状态与批注通过接口持久化到独立的 `dispositions.json`（现有持久化目录），**重新打开分析时自动恢复**；每次变更追加处置记录，操作者填写的更新时间原样保留（未填时回退服务端时间）。处置数据与原始分析结果完全分离，**任何操作都不改写分析结果**（导出报告、对比、排程均不受影响）
 - **分析对比**：选择任意两条已保存分析，服务端**按区域对（zone pair）匹配冲突**（不依赖 `conflict-N` 编号——编号会随冲突增减与面积排序漂移），输出四类结果：**新增**（基线无、对照有）、**已解决**（基线有、对照无）、**持续且属性变化**、**持续且属性未变**；属性变化逐字段标注冲突类型、重叠起止/天数、共享资源（新增/移除的资源名），并保留两侧完整冲突详情。要求两条分析基于**同一区域集合**（参与分析的区域随结果保存为 `zoneSummaries`），新增/删除区域、重新导入（uuid 变化）或筛选区域不同都会以可理解的错误信息拒绝并列出差异区域
 - **图层筛选**：按 `properties.layer` 勾选参与分析的图层，可限定分析时段（重叠期自动按时段裁剪）
 - **地图可视化**：Leaflet 地图展示各区域（按图层着色）与按冲突类型着色的相交区域，点击结果可定位（纯资源冲突无相交几何，不上图）
@@ -46,6 +47,7 @@ npm start
 5. 在「已保存分析」输入名称后点「**保存当前分析**」，之后可随时「查看」复现（含集群选择视图所需的全部摘要）或「导出」GeoJSON 报告
 6. 在「**分析对比**」分别选择基线与对照两条已保存分析（默认按保存时间自动选择最早/最晚两条），点击「**开始对比**」：结果区以分类页签展示新增 / 已解决 / 持续（可单独筛出属性变化）数量与明细；持续冲突逐条列出冲突类型、重叠起止/天数、共享资源的前后差异，展开可见两侧完整冲突详情。若两条分析的区域集合不同，会在对比面板直接提示差异区域名称，需基于同一批区域重新保存后再对比
 7. 在「已保存分析」中点击某条分析的「**排程**」：结果区展开「**共享资源错峰排程**」面板，选择共享资源（默认取冲突最多的资源）与可用数量（默认 1），点击「**生成排程**」查看每区域建议起止、延后天数、受影响冲突（已错开 / 容量内并行）与时间轴；点击「**导出排程 JSON**」下载完整排程文件。切换资源或修改数量会自动重新生成
+8. 在「已保存分析」中点击某条分析的「**处置**」：结果区展开「**冲突处置工作台**」，冲突按稳定区域对逐条列出（与主视图同序，便于对照地图）。为每条冲突选择「待处理 / 已确认 / 已解决」、填写批注，可调整「更新时间」（默认可一键采用当前时刻，亦可手工指定）后点「**保存**」；顶部页签可按状态筛选并显示各类汇总计数。可在顶部统一填写「操作者」（浏览器本地记住），每条保存后展示最近更新时间与历史处置记录；关闭后再次「**处置**」或「**查看**」该分析时状态与批注自动恢复
 
 ### 导入流程（预检 → 确认 → 写入）
 
@@ -154,6 +156,45 @@ npm test
 | 分析结果数据损坏（无 `conflicts` 列表） | 400 | 指出是哪条分析数据不完整 |
 | 区域集合不同 | 422 | `code: "ZONE_SET_MISMATCH"`，`zonesOnlyInBefore` / `zonesOnlyInAfter` 给出仅单侧存在的区域 id，错误信息中附带区域名称（各列前 5 个） |
 
+## 冲突处置工作台
+
+`GET /api/analyses/:id/dispositions` 返回：
+
+| 字段 | 说明 |
+| --- | --- |
+| `analysisId` / `analysisName` / `savedAt` | 所属分析摘要 |
+| `docUpdatedAt` | 处置文档最近更新时间（无任何处置时为 `null`） |
+| `summary` | `{total, pending, confirmed, resolved, handled}`；`pending` 含从未处置的冲突，`handled` 为至少保存过一次的条数 |
+| `items[]` | 与分析结果 `conflicts` **同序**的处置视图，见下表 |
+
+`items[]` 每项（冲突原始字段 + 处置字段，分析结果本身不被修改）：
+
+| 字段 | 说明 |
+| --- | --- |
+| `pairKey` | **稳定区域对键**：两个区域 id 排序后以 `::` 拼接（与分析对比的匹配键一致），不依赖 `conflict-N` 编号 |
+| `conflictId` / `conflictType` / `zones` / `sharedResources` / `overlap*` / `areaM2*` / `geometry` / `suggestions` | 原始冲突字段（只读展示） |
+| `status` | `pending`（待处理，默认）/ `confirmed`（已确认）/ `resolved`（已解决） |
+| `comment` / `operator` | 批注与操作者（未处置为空字符串） |
+| `handled` | 是否保存过处置 |
+| `createdAt` / `updatedAt` | 首次 / 最近处置时间；`updatedAt` 为操作者填写并原样保留的时间 |
+| `history[]` | 追加式处置记录 `{at, status, comment, operator}`（创建即首条，上限 200 条，超出保留最近记录） |
+
+`PUT /api/analyses/:id/dispositions` 请求体 `{pairKey, status, comment?, operator?, updatedAt?}`，返回 `{changed, entry, summary}`：
+
+- `updatedAt` 由操作者填写，服务端仅校验可解析性，**原样存储，不以服务端时钟覆盖**；不传时回退服务端当前时间；
+- `pairKey` 必须存在于当前分析结果中（分析重新生成、区域对已不存在时以 400 拒绝，避免写入脏数据）；
+- 状态/批注/操作者与现状完全一致时 `changed:false`，不追加历史；
+- 处置数据写入 `DATA_DIR/dispositions.json`，与 `analyses.json` 分离；删除分析时级联清理。
+
+### 处置错误响应
+
+| 场景 | 状态码 | 说明 |
+| --- | --- | --- |
+| 分析不存在 | 404 | `分析不存在` |
+| 分析结果数据损坏（无 `conflicts`） | 400 | 指出分析结果不完整 |
+| `pairKey` 不在分析结果中 | 400 | 提示重新打开工作台 |
+| `status` 非三种合法值 / `updatedAt` 不可解析 / 批注或操作者类型错误、超长 | 400 | 指出具体字段问题 |
+
 ## 共享资源错峰排程输出字段
 
 `POST /api/analyses/:id/schedule`（body `{resource, capacity?}`，`capacity` 默认 1）基于已保存分析的冲突结果生成排程，返回：
@@ -204,9 +245,11 @@ npm test
 | GET | `/api/layers` | 图层列表 |
 | POST | `/api/analyze` | 运行分析，body：`{layers?, start?, end?}`；结果含 `clusters` / `clusterCount` |
 | POST | `/api/analyses` | 保存分析，body：`{name?, params?, result}`（集群摘要随 result 一并持久化） |
-| GET | `/api/analyses` | 已保存分析列表（含 `conflictCountByType`、`clusterCount`） |
+| GET | `/api/analyses` | 已保存分析列表（含 `conflictCountByType`、`clusterCount`、`dispositionSummary` 处置进度） |
 | GET | `/api/analyses/:id` | 分析详情 |
-| DELETE | `/api/analyses/:id` | 删除分析 |
+| DELETE | `/api/analyses/:id` | 删除分析（级联删除其处置数据） |
+| GET | `/api/analyses/:id/dispositions` | **冲突处置工作台**：返回与分析结果同序、按稳定区域对关联的冲突视图（含状态/批注/操作者/时间/历史）与按状态汇总计数；重新打开时据此恢复 |
+| PUT | `/api/analyses/:id/dispositions` | 更新一条冲突处置：body `{pairKey, status, comment?, operator?, updatedAt?}`；`status` 为 `pending`/`confirmed`/`resolved`，操作者填写的 `updatedAt` 合法则原样保留（未传回退服务端时间）；不修改分析结果 |
 | POST | `/api/analyses/compare` | **分析对比**：body `{baselineId, comparisonId}`；按区域对匹配冲突，返回新增/已解决/持续（含逐字段属性变化）。同一条分析返回 400、分析不存在返回 404、区域集合不同返回 422（错误信息含仅单侧存在的区域） |
 | GET | `/api/analyses/:id/schedule/resources` | 列出该分析可排程的共享资源（至少一条资源冲突）：`{resource, conflictCount, zoneCount}[]`，按冲突数降序 |
 | POST | `/api/analyses/:id/schedule` | **共享资源错峰排程**：body `{resource, capacity?}`（容量默认 1）；返回每区域建议起止/延后天数/受影响冲突，不修改区域与分析；无相关冲突返回空计划 |
@@ -234,16 +277,17 @@ npm test
 ## 项目结构
 
 ```
-├── server.js            # Express 入口与 API 路由（precheck / commit / import / analyze）
+├── server.js            # Express 入口与 API 路由（precheck / commit / import / analyze / disposition）
 ├── src/
 │   ├── analysis.js      # 时空/资源冲突检测与错峰建议生成
 │   ├── compare.js       # 分析对比：按区域对匹配 + 新增/已解决/持续/属性变化分类
 │   ├── schedule.js      # 共享资源错峰排程：容量受限的连续列表调度（纯计算，不改原数据）
+│   ├── disposition.js   # 冲突处置工作台：区域对键视图、状态/批注校验写入、更新时间原样保留（不改分析结果）
 │   ├── clusters.js      # 冲突协调集群：无向图连通分量 + Tarjan 割点（关键区域）
 │   ├── quality.js       # 导入质量预检与规范化（环/顶点/自相交/时间/资源，JSONPath 定位）
 │   ├── geo.js           # 局部投影与面积计算
-│   └── store.js         # JSON 文件持久化（区域 / 已保存分析）
-├── public/              # 前端（Leaflet 地图 + 集群卡片 + 分析面板 + 对比面板 + 排程面板 + 预检结果页）
+│   └── store.js         # JSON 文件持久化（区域 / 已保存分析 / 处置数据）
+├── public/              # 前端（Leaflet 地图 + 集群卡片 + 分析面板 + 对比面板 + 排程面板 + 处置工作台 + 预检结果页）
 │   ├── sample.geojson   # 示例数据（含 resources 字段）
 │   └── sample-issues.geojson # 问题示例（各类错误/警告）
 ├── test/analysis.test.js
@@ -251,13 +295,14 @@ npm test
 ├── test/quality.test.js
 ├── test/compare.test.js
 ├── test/schedule.test.js
+├── test/disposition.test.js
 ├── Dockerfile
 └── docker-compose.yml
 ```
 
 ## 说明
 
-- 数据持久化在 `DATA_DIR`（默认 `./data`，容器内 `/app/data`，Compose 已挂载命名卷）
+- 数据持久化在 `DATA_DIR`（默认 `./data`，容器内 `/app/data`，Compose 已挂载命名卷）：区域 `zones.json`、已保存分析 `analyses.json`、冲突处置 `dispositions.json` 三个文件相互独立，处置操作只写 `dispositions.json`
 - 面积采用以相交区域质心为原点的局部等距圆柱投影近似，适用于施工场地尺度（公里级）的冲突评估
 - 仅边界相接（零面积接触）不计为空间冲突
 - 资源冲突只要求"时间重叠 + 资源同名"，与空间位置无关；资源名比较为精确匹配（导入时已做去空白处理），建议统一命名口径（如统一用「塔吊」而非「塔吊/塔式起重机」混用）

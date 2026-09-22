@@ -7,6 +7,13 @@ const { analyze, normalizeZone } = require('./src/analysis');
 const { precheck, extractFeatures } = require('./src/quality');
 const { compareAnalyses, ComparisonError } = require('./src/compare');
 const { buildSchedule, listScheduleResources, ScheduleError } = require('./src/schedule');
+const {
+  buildDispositionView,
+  applyDisposition,
+  summarizeItems,
+  summarizeRecord,
+  DispositionError,
+} = require('./src/disposition');
 const store = require('./src/store');
 
 const app = express();
@@ -151,16 +158,31 @@ app.post('/api/analyses', (req, res) => {
 
 // 列出已保存分析（不含大结果体，便于列表展示）
 app.get('/api/analyses', (req, res) => {
-  const list = store.listAnalyses().map(({ id, name, savedAt, params, result }) => ({
-    id,
-    name,
-    savedAt,
-    params,
-    conflictCount: result.conflictCount,
-    conflictCountByType: result.conflictCountByType || null,
-    clusterCount: result.clusterCount || (Array.isArray(result.clusters) ? result.clusters.length : 0),
-    totalConflictAreaM2: result.totalConflictAreaM2,
-  }));
+  const list = store.listAnalyses().map(({ id, name, savedAt, params, result }) => {
+    const summary = summarizeRecord(
+      { id, result },
+      store.getDispositions(id)
+    );
+    return {
+      id,
+      name,
+      savedAt,
+      params,
+      conflictCount: result.conflictCount,
+      conflictCountByType: result.conflictCountByType || null,
+      clusterCount: result.clusterCount || (Array.isArray(result.clusters) ? result.clusters.length : 0),
+      totalConflictAreaM2: result.totalConflictAreaM2,
+      // 处置进度汇总（无处置记录时为 null，前端据此显示「处置」入口状态）
+      dispositionSummary: summary ? {
+        total: summary.total,
+        pending: summary.pending,
+        confirmed: summary.confirmed,
+        resolved: summary.resolved,
+        handled: summary.handled,
+        updatedAt: summary.updatedAt,
+      } : null,
+    };
+  });
   res.json({ analyses: list });
 });
 
@@ -171,10 +193,61 @@ app.get('/api/analyses/:id', (req, res) => {
   res.json(record);
 });
 
-// 删除已保存分析
+// 删除已保存分析（级联删除其冲突处置数据；原始分析结果随记录一并删除）
 app.delete('/api/analyses/:id', (req, res) => {
   const removed = store.deleteAnalysis(req.params.id);
+  if (removed) store.deleteDispositions(req.params.id);
   res.status(removed ? 204 : 404).end();
+});
+
+// ---- 冲突处置工作台（状态/批注独立持久化，永不改写原始分析结果）----
+
+// 获取某条分析的处置视图：冲突按原始顺序输出并附带稳定区域对键与处置状态，
+// 重新打开分析时据此恢复；含按状态的汇总计数
+app.get('/api/analyses/:id/dispositions', (req, res) => {
+  const record = store.getAnalysis(req.params.id);
+  if (!record) return res.status(404).json({ error: '分析不存在' });
+  try {
+    const doc = store.getDispositions(record.id);
+    const items = buildDispositionView(record, doc);
+    res.json({
+      analysisId: record.id,
+      analysisName: record.name,
+      savedAt: record.savedAt || null,
+      docUpdatedAt: doc ? doc.updatedAt || null : null,
+      summary: summarizeItems(items),
+      items,
+    });
+  } catch (err) {
+    if (err instanceof DispositionError) {
+      return res.status(err.status || 400).json({ error: err.message });
+    }
+    return res.status(400).json({ error: err.message });
+  }
+});
+
+// 更新一条冲突（区域对）的处置：body {pairKey, status, comment?, operator?, updatedAt?}
+// updatedAt 由操作者填写，服务端校验合法后原样保留；不提交则回退服务端当前时间
+app.put('/api/analyses/:id/dispositions', (req, res) => {
+  const record = store.getAnalysis(req.params.id);
+  if (!record) return res.status(404).json({ error: '分析不存在' });
+  try {
+    const result = applyDisposition(record, store.getDispositions(record.id), req.body || {});
+    if (result.changed) store.saveDispositions(result.doc);
+    const items = buildDispositionView(record, result.doc);
+    const savedItem = items.find((it) => it.pairKey === result.entry.pairKey) || null;
+    res.json({
+      analysisId: record.id,
+      changed: result.changed,
+      entry: savedItem,
+      summary: summarizeItems(items),
+    });
+  } catch (err) {
+    if (err instanceof DispositionError) {
+      return res.status(err.status || 400).json({ error: err.message });
+    }
+    return res.status(400).json({ error: err.message });
+  }
 });
 
 // 分析对比：选择两条已保存分析，服务端按区域对匹配冲突，

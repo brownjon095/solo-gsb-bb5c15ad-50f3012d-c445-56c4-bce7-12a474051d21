@@ -487,3 +487,76 @@ button.small { padding: 2px 8px; font-size: 12px; }
 .sched-cf.is-remaining { background: #fff4e0; border-color: #f0ad4e; color: #8a4b00; }
 .sched-cf-state { font-weight: bold; margin-left: 2px; }
 .sched-cf-state.remaining { font-weight: normal; }
+
+/* ---------- 冲突处置工作台 ---------- */
+.disp-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 12px; }
+.disp-tab {
+  border-color: #c4d2df;
+  border-radius: 16px;
+  padding: 3px 12px;
+  font-size: 12.5px;
+  background: #f6f9fc;
+  color: #34495e;
+}
+.disp-tab:hover { background: #eaf1f8; }
+.disp-tab.active { background: #1f3b57; border-color: #1f3b57; color: #fff; }
+.disp-tab.pending.active { background: #e8590c; border-color: #e8590c; }
+.disp-tab.confirmed.active { background: #1971c2; border-color: #1971c2; }
+.disp-tab.resolved.active { background: #1a7f37; border-color: #1a7f37; }
+
+.disp-list { display: flex; flex-direction: column; gap: 10px; }
+.disp-item {
+  border: 1px solid #e0e0e0;
+  border-left: 5px solid #e8590c;
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: #fff;
+}
+.disp-item.st-pending { border-left-color: #e8590c; background: #fffdfa; }
+.disp-item.st-confirmed { border-left-color: #1971c2; background: #f8fbff; }
+.disp-item.st-resolved { border-left-color: #1a7f37; background: #f8fdf9; }
+
+.disp-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.disp-pair { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; font-size: 13px; }
+.disp-pair .pair-x { color: #99a; font-size: 12px; }
+
+.disp-status-pill {
+  display: inline-block;
+  border-radius: 10px;
+  padding: 1px 10px;
+  font-size: 12px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.disp-status-pill.st-pending { background: #fff4e6; color: #d9480f; border-color: #ffc078; }
+.disp-status-pill.st-confirmed { background: #e7f1fb; color: #18588f; border-color: #a5c8e8; }
+.disp-status-pill.st-resolved { background: #e6f4ea; color: #1a5f2c; border-color: #7cc496; }
+
+.disp-meta { font-size: 12px; color: #777; margin: 6px 0; line-height: 1.7; }
+.disp-edit { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; margin-top: 8px; }
+.disp-status-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
+.disp-status-btn { padding: 4px 10px; font-size: 12px; border-radius: 14px; border: 1px solid #c4d2df; }
+.disp-status-btn.sel-pending.sel { background: #e8590c; border-color: #e8590c; color: #fff; }
+.disp-status-btn.sel-confirmed.sel { background: #1971c2; border-color: #1971c2; color: #fff; }
+.disp-status-btn.sel-resolved.sel { background: #1a7f37; border-color: #1a7f37; color: #fff; }
+.disp-comment {
+  flex: 1;
+  min-width: 220px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 5px 8px;
+  font-size: 12.5px;
+  font-family: inherit;
+  resize: vertical;
+}
+.disp-time { font-size: 12px; display: flex; gap: 4px; align-items: center; }
+.disp-time input { border: 1px solid #ccc; border-radius: 4px; padding: 4px 6px; font-size: 12px; }
+.disp-save { padding: 4px 14px; font-size: 12.5px; }
+
+.disp-history { margin-top: 8px; }
+.disp-history summary { cursor: pointer; color: #1971c2; font-size: 12px; }
+.disp-history ol { margin: 6px 0 0; padding-left: 20px; font-size: 12px; color: #555; line-height: 1.8; }
+
+.disp-progress { font-size: 12px; color: #5a6b7d; margin-left: 6px; }
+.analysis-list .disp-btn { border-color: #7048e8; color: #7048e8; }
+.analysis-list .disp-btn:hover { background: #f1edff; }
