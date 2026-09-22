@@ -7,6 +7,14 @@ const { analyze, normalizeZone } = require('./src/analysis');
 const { precheck, extractFeatures } = require('./src/quality');
 const { compareAnalyses, ComparisonError } = require('./src/compare');
 const { buildSchedule, listScheduleResources, ScheduleError } = require('./src/schedule');
+const {
+  buildEntries,
+  attachDispositions,
+  summarize,
+  countItems,
+  applyDisposition,
+  DispositionError,
+} = require('./src/disposition');
 const store = require('./src/store');
 
 const app = express();
@@ -160,6 +168,8 @@ app.get('/api/analyses', (req, res) => {
     conflictCountByType: result.conflictCountByType || null,
     clusterCount: result.clusterCount || (Array.isArray(result.clusters) ? result.clusters.length : 0),
     totalConflictAreaM2: result.totalConflictAreaM2,
+    // 处置进度汇总（按稳定区域对计数；不依赖冲突编号）
+    dispositionSummary: countItems(store.listDispositions(id)),
   }));
   res.json({ analyses: list });
 });
@@ -256,6 +266,66 @@ app.get('/api/analyses/:id/schedule/export', (req, res) => {
     }
     return res.status(400).json({ error: err.message });
   }
+});
+
+// ---- 冲突处置工作台（基于已保存分析；只读写独立的处置数据，绝不改写原始分析结果）----
+
+// 获取一条分析下全部冲突（按稳定区域对）及其处置状态/批注
+app.get('/api/analyses/:id/dispositions', (req, res) => {
+  const record = store.getAnalysis(req.params.id);
+  if (!record) return res.status(404).json({ error: '分析不存在' });
+  let entries;
+  try {
+    entries = buildEntries(record.result);
+  } catch (err) {
+    if (err instanceof DispositionError) return res.status(400).json({ error: err.message });
+    throw err;
+  }
+  const items = store.listDispositions(req.params.id);
+  res.json({
+    analysisId: record.id,
+    analysisName: record.name,
+    summary: summarize(entries, items),
+    entries: attachDispositions(entries, items),
+  });
+});
+
+// 登记/更新一条冲突的处置：body { pairKey, status, comment?, updatedAt? }
+// status ∈ pending/confirmed/resolved；updatedAt 为操作者填写的更新时间（未传则取服务端当前时间）
+app.put('/api/analyses/:id/dispositions', (req, res) => {
+  const record = store.getAnalysis(req.params.id);
+  if (!record) return res.status(404).json({ error: '分析不存在' });
+
+  let validPairKeys;
+  try {
+    validPairKeys = new Set(buildEntries(record.result).map((e) => e.pairKey));
+  } catch (err) {
+    if (err instanceof DispositionError) return res.status(400).json({ error: err.message });
+    throw err;
+  }
+
+  const body = req.body || {};
+  if (typeof body.pairKey !== 'string' || !validPairKeys.has(body.pairKey)) {
+    return res.status(400).json({ error: '该区域对不属于当前分析（冲突可能已随重新保存而变化），请重新打开处置工作台' });
+  }
+
+  let applied;
+  try {
+    applied = applyDisposition(store.listDispositions(req.params.id), body);
+  } catch (err) {
+    if (err instanceof DispositionError) return res.status(err.status || 400).json({ error: err.message });
+    throw err;
+  }
+  store.upsertDisposition(req.params.id, applied.record.pairKey, applied.record);
+
+  // 返回更新后的完整处置视图，前端据此恢复计数与列表状态
+  const entries = buildEntries(record.result);
+  const items = store.listDispositions(req.params.id);
+  res.json({
+    analysisId: record.id,
+    summary: summarize(entries, items),
+    entry: { ...entries.find((e) => e.pairKey === applied.record.pairKey), disposition: applied.record },
+  });
 });
 
 // 导出 GeoJSON 报告（相交区域 + 冲突类型 + 共享资源 + 建议）

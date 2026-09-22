@@ -136,6 +136,23 @@
         <p id="scheduleMsg" class="msg"></p>
         <div id="scheduleResult"></div>
       </section>
+
+      <section class="card" id="dispositionCard" hidden>
+        <div class="cluster-head">
+          <h2>冲突处置工作台 <span id="dispositionSummary" class="badge"></span></h2>
+          <button id="dispositionCloseBtn" class="small" type="button">关闭 ✕</button>
+        </div>
+        <p class="cluster-hint">针对已保存分析「<strong id="dispositionAnalysisName"></strong>」逐条处置：冲突按<strong>稳定的区域对</strong>标识（不随冲突编号漂移）。处置状态与批注独立保存，<strong>不会改写原始分析结果</strong>，重新打开时自动恢复。</p>
+        <div class="disposition-tabs" id="dispositionTabs">
+          <button type="button" class="disposition-tab active" data-cat="all">全部 <span class="tab-count" data-count="all">0</span></button>
+          <button type="button" class="disposition-tab untouched" data-cat="untouched">⬜ 未处置 <span class="tab-count" data-count="untouched">0</span></button>
+          <button type="button" class="disposition-tab pending" data-cat="pending">🕓 待处理 <span class="tab-count" data-count="pending">0</span></button>
+          <button type="button" class="disposition-tab confirmed" data-cat="confirmed">✔ 已确认 <span class="tab-count" data-count="confirmed">0</span></button>
+          <button type="button" class="disposition-tab resolved" data-cat="resolved">✅ 已解决 <span class="tab-count" data-count="resolved">0</span></button>
+        </div>
+        <p id="dispositionMsg" class="msg"></p>
+        <div id="dispositionList" class="disposition-list"></div>
+      </section>
     </section>
   </main>
 

@@ -487,3 +487,97 @@ button.small { padding: 2px 8px; font-size: 12px; }
 .sched-cf.is-remaining { background: #fff4e0; border-color: #f0ad4e; color: #8a4b00; }
 .sched-cf-state { font-weight: bold; margin-left: 2px; }
 .sched-cf-state.remaining { font-weight: normal; }
+
+/* ---------- 冲突处置工作台 ---------- */
+.disposition-btn { border-color: #8a5200; color: #8a5200; }
+.disposition-btn:hover { background: #fdf3e3; }
+
+.disposition-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 12px; }
+.disposition-tab {
+  border-color: #c4d2df;
+  border-radius: 16px;
+  padding: 3px 12px;
+  font-size: 12.5px;
+  background: #f6f9fc;
+  color: #34495e;
+}
+.disposition-tab:hover { background: #eaf1f8; }
+.disposition-tab.active { background: #1f3b57; border-color: #1f3b57; color: #fff; }
+.disposition-tab.untouched.active { background: #5f6b7a; border-color: #5f6b7a; }
+.disposition-tab.pending.active { background: #e8a10c; border-color: #e8a10c; }
+.disposition-tab.confirmed.active { background: #1971c2; border-color: #1971c2; }
+.disposition-tab.resolved.active { background: #1a7f37; border-color: #1a7f37; }
+
+.disposition-list { display: flex; flex-direction: column; gap: 10px; }
+.disposition-item {
+  border: 1px solid #e0e0e0;
+  border-left: 4px solid #999;
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: #fff;
+  font-size: 13px;
+}
+.disposition-item.is-untouched { border-left-color: #adb5bd; background: #fbfcfd; }
+.disposition-item.has-pending { border-left-color: #e8a10c; background: #fffdf5; }
+.disposition-item.has-confirmed { border-left-color: #1971c2; background: #f5faff; }
+.disposition-item.has-resolved { border-left-color: #1a7f37; background: #f7fdf9; }
+.disposition-item h3 { margin: 0 0 6px; font-size: 13.5px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.disposition-item .stats { color: #444; line-height: 1.7; }
+.disposition-item .tag {
+  display: inline-block;
+  background: #f0e68c;
+  border-radius: 4px;
+  padding: 0 6px;
+  font-size: 12px;
+}
+.disposition-item .tag.resource { background: #ffe8cc; color: #8a4b00; }
+.disposition-item .tag.cluster-tag { background: #e7f0fb; color: #18588f; border: 1px solid #b6d4ef; }
+.disposition-item .pair-x { color: #99a; font-size: 12px; }
+.disp-pairkey {
+  margin-top: 4px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11px;
+  color: #7b8a99;
+}
+
+.disp-form {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed #e3e3e3;
+}
+.disp-controls { margin-bottom: 6px; }
+.disp-controls select, .disp-controls input[type="datetime-local"] {
+  font-size: 12.5px;
+}
+.disp-saved-meta { font-size: 11.5px; color: #888; }
+.disp-comment-wrap textarea.disp-comment {
+  margin-bottom: 6px;
+  font-family: inherit;
+  font-size: 12.5px;
+  min-height: 40px;
+}
+.disp-actions { align-items: center; margin-bottom: 0; }
+.disp-save-msg { margin-left: 4px; }
+.disp-status-badge {
+  display: inline-block;
+  color: #fff;
+  border-radius: 4px;
+  padding: 1px 8px;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.disp-status-badge.untouched { background: #adb5bd; }
+
+.disp-history { margin-top: 6px; font-size: 12px; }
+.disp-history summary { cursor: pointer; color: #1971c2; }
+.disp-history ul { list-style: none; margin: 6px 0 0; padding: 0; }
+.disp-history li {
+  border-left: 2px solid #d9e2ec;
+  padding: 3px 0 3px 10px;
+  margin-bottom: 4px;
+}
+.disp-history li.latest { border-left-color: #1971c2; background: #f6fafe; border-radius: 0 4px 4px 0; }
+.disp-history-state { font-weight: bold; margin-right: 8px; }
+.disp-history-time { color: #777; font-size: 11.5px; }
+.disp-hist-comment { margin-top: 2px; color: #444; }
+.disp-hist-comment.meta { color: #99a; }

@@ -19,7 +19,27 @@ const state = {
     resources: [],
     plan: null,
   },
+  disposition: {        // 冲突处置工作台
+    analysisId: null,
+    analysisName: '',
+    entries: [],
+    summary: null,
+    cat: 'all',
+  },
 };
+
+// 冲突处置状态展示配置
+const DISPOSITION_STATUS = {
+  pending: { label: '待处理', color: '#e8a10c' },
+  confirmed: { label: '已确认', color: '#1971c2' },
+  resolved: { label: '已解决', color: '#1a7f37' },
+};
+/** datetime-local 输入框值（本地时区，精确到分钟） */
+function toLocalInputValue(iso) {
+  const d = new Date(iso || Date.now());
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
 
 // 冲突类型展示配置
 const CONFLICT_TYPES = {
@@ -650,10 +670,19 @@ async function refreshAnalyses() {
       ? `（空间 ${a.conflictCountByType.spatial} / 资源 ${a.conflictCountByType.resource} / 空间+资源 ${a.conflictCountByType.both}）`
       : '';
     const clusterInfo = a.clusterCount ? ` · ${a.clusterCount} 个协调集群` : '';
+    // 处置进度：已处置数 / 冲突总数（未处置 = 总数 - 已处置）
+    const ds = a.dispositionSummary;
+    const total = a.conflictCount || 0;
+    const handled = ds ? ds.handled : 0;
+    const dispInfo = total
+      ? ` · 处置 ${handled}/${total}` + (handled > 0
+        ? `（待处理 ${ds.pending} / 已确认 ${ds.confirmed} / 已解决 ${ds.resolved}）`
+        : '')
+      : '';
     li.innerHTML = `
       <span>
         <strong>${escapeHtml(a.name)}</strong>
-        <div class="meta">${new Date(a.savedAt).toLocaleString('zh-CN')} · ${a.conflictCount} 处冲突${typeInfo}${clusterInfo} · ${fmtArea(a.totalConflictAreaM2)}</div>
+        <div class="meta">${new Date(a.savedAt).toLocaleString('zh-CN')} · ${a.conflictCount} 处冲突${typeInfo}${clusterInfo} · ${fmtArea(a.totalConflictAreaM2)}${dispInfo}</div>
       </span>`;
     const btns = document.createElement('span');
     btns.className = 'row';
@@ -680,15 +709,22 @@ async function refreshAnalyses() {
     sched.title = '共享资源错峰排程：选择资源与可用数量，生成不超容量的连续安排';
     sched.onclick = () => openSchedule(a.id, a.name);
 
+    const disp = document.createElement('button');
+    disp.className = 'small disposition-btn';
+    disp.textContent = '处置';
+    disp.title = '冲突处置工作台：按稳定区域对登记待处理 / 已确认 / 已解决状态与批注';
+    disp.onclick = () => openDisposition(a.id, a.name);
+
     const del = document.createElement('button');
     del.className = 'danger small';
     del.textContent = '删除';
     del.onclick = async () => {
       await api(`/api/analyses/${a.id}`, { method: 'DELETE' });
       await refreshAnalyses();
+      if (state.disposition.analysisId === a.id) closeDisposition();
     };
 
-    btns.append(view, exp, sched, del);
+    btns.append(view, exp, sched, disp, del);
     li.appendChild(btns);
     list.appendChild(li);
   }
@@ -1084,6 +1120,224 @@ function renderSchedule(plan) {
   box.appendChild(table);
 }
 
+// ---------- 冲突处置工作台 ----------
+
+/**
+ * 打开某条已保存分析的处置工作台：
+ * 拉取按稳定区域对展开的冲突清单与已持久化的处置状态/批注。
+ */
+async function openDisposition(analysisId, analysisName) {
+  const card = $('dispositionCard');
+  card.hidden = false;
+  card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  state.disposition = { analysisId, analysisName, entries: [], summary: null, cat: 'all' };
+  $('dispositionAnalysisName').textContent = analysisName;
+  $('dispositionList').innerHTML = '<em>正在加载冲突清单…</em>';
+  $('dispositionSummary').textContent = '';
+  $('dispositionMsg').textContent = '';
+  $('dispositionMsg').className = 'msg';
+  document.querySelectorAll('#dispositionTabs .disposition-tab').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.cat === 'all');
+  });
+
+  try {
+    const data = await api(`/api/analyses/${analysisId}/dispositions`);
+    state.disposition.entries = data.entries;
+    state.disposition.summary = data.summary;
+    renderDisposition();
+  } catch (err) {
+    $('dispositionList').innerHTML = '';
+    showMsg($('dispositionMsg'), err.message, false);
+  }
+}
+
+function closeDisposition() {
+  $('dispositionCard').hidden = true;
+  state.disposition = { analysisId: null, analysisName: '', entries: [], summary: null, cat: 'all' };
+}
+
+function renderDisposition() {
+  const { entries, summary, cat } = state.disposition;
+  if (!entries) return;
+
+  $('dispositionSummary').textContent =
+    `${summary.total} 个区域对 · 已处置 ${summary.handled} · 未处置 ${summary.untouched}`;
+
+  const counts = {
+    all: summary.total,
+    untouched: summary.untouched,
+    pending: summary.pending,
+    confirmed: summary.confirmed,
+    resolved: summary.resolved,
+  };
+  document.querySelectorAll('#dispositionTabs .tab-count').forEach((el) => {
+    el.textContent = counts[el.dataset.count];
+  });
+
+  const box = $('dispositionList');
+  box.innerHTML = '';
+
+  const filtered = entries.filter((e) => {
+    if (cat === 'all') return true;
+    if (cat === 'untouched') return !e.disposition;
+    return e.disposition && e.disposition.status === cat;
+  });
+
+  if (!entries.length) {
+    box.innerHTML = '<em>该分析没有冲突，无需处置。</em>';
+    return;
+  }
+  if (!filtered.length) {
+    const empty = {
+      untouched: '所有冲突均已登记处置。',
+      pending: '没有标记为「待处理」的冲突。',
+      confirmed: '没有标记为「已确认」的冲突。',
+      resolved: '没有标记为「已解决」的冲突。',
+    }[cat];
+    box.innerHTML = `<em>${empty}</em>`;
+    return;
+  }
+
+  filtered.forEach((entry) => {
+    box.appendChild(buildDispositionItem(entry));
+  });
+}
+
+function buildDispositionItem(entry) {
+  const item = document.createElement('div');
+  const status = entry.disposition ? entry.disposition.status : null;
+  item.className = `disposition-item${status ? ` has-${status}` : ' is-untouched'}`;
+
+  const typeInfo = CONFLICT_TYPES[entry.conflictType] || CONFLICT_TYPES.spatial;
+  const zoneTags = entry.zones
+    .map((z) => `<span class="tag">${escapeHtml(z.name)}（${escapeHtml(z.layer)}）</span>`)
+    .join(' <span class="pair-x">×</span> ');
+  const resTags = entry.sharedResources.length
+    ? `共享资源：${entry.sharedResources.map((r) => `<span class="tag resource">${escapeHtml(r)}</span>`).join(' ')}<br>`
+    : '';
+  const areaLine = entry.areaM2 > 0 ? fmtArea(entry.areaM2) : '无空间相交（仅资源冲突）';
+  const clusterLine = entry.clusterId
+    ? `<span class="tag cluster-tag">🔗 ${escapeHtml(entry.clusterId.replace('cluster-', '集群 '))}</span>`
+    : '';
+  // 稳定标识：区域对键（uuid 较长，截断展示，悬停可见完整键）
+  const shortKey = entry.pairKey
+    .split('::')
+    .map((id) => (id.length > 8 ? `${id.slice(0, 8)}…` : id))
+    .join(' × ');
+
+  const statusBadge = status
+    ? `<span class="disp-status-badge" style="background:${DISPOSITION_STATUS[status].color}">${DISPOSITION_STATUS[status].label}</span>`
+    : '<span class="disp-status-badge untouched">未处置</span>';
+
+  const itemHead = document.createElement('div');
+  itemHead.className = 'disp-head';
+  itemHead.innerHTML = `
+    <h3>
+      <span class="type-badge" style="background:${typeInfo.color}">${typeLabel(entry.conflictType)}</span>
+      ${zoneTags}
+    </h3>
+    <div class="stats">
+      重叠时段：${fmtDate(entry.overlapStart)} ~ ${fmtDate(entry.overlapEnd)}（${entry.overlapDays ?? '-'} 天）<br>
+      ${resTags}重叠面积：${areaLine} ${clusterLine}
+    </div>
+    <div class="disp-pairkey" title="稳定区域对键（重新分析后编号会漂移，此键不变）">🔑 区域对：${escapeHtml(shortKey)}</div>`;
+  item.appendChild(itemHead);
+
+  // ---- 处置表单 ----
+  const form = document.createElement('div');
+  form.className = 'disp-form';
+
+  const d = entry.disposition;
+  const row1 = document.createElement('div');
+  row1.className = 'row disp-controls';
+  row1.innerHTML = `
+    <label>处置状态
+      <select class="disp-status-select">
+        <option value="pending"${status === 'pending' ? ' selected' : ''}>🕓 待处理</option>
+        <option value="confirmed"${status === 'confirmed' ? ' selected' : ''}>✔ 已确认</option>
+        <option value="resolved"${status === 'resolved' ? ' selected' : ''}>✅ 已解决</option>
+      </select>
+    </label>
+    <label>更新时间
+      <input type="datetime-local" class="disp-updated-at" value="${toLocalInputValue(d ? d.updatedAt : new Date().toISOString())}" />
+    </label>
+    <span class="disp-saved-meta">${d && d.updatedAt ? `上次更新：${new Date(d.updatedAt).toLocaleString('zh-CN')}` : '尚未保存'}</span>`;
+  form.appendChild(row1);
+
+  const commentWrap = document.createElement('div');
+  commentWrap.className = 'disp-comment-wrap';
+  commentWrap.innerHTML = `<textarea class="disp-comment" rows="2" maxlength="2000" placeholder="填写处置批注（协调结论、责任人、现场措施等）">${escapeHtml(d ? d.comment || '' : '')}</textarea>`;
+  form.appendChild(commentWrap);
+
+  const actions = document.createElement('div');
+  actions.className = 'row disp-actions';
+  const saveBtn = document.createElement('button');
+  saveBtn.type = 'button';
+  saveBtn.className = 'primary small';
+  saveBtn.textContent = '保存处置';
+  const saveMsg = document.createElement('span');
+  saveMsg.className = 'msg disp-save-msg';
+  actions.append(saveBtn, statusBadge, saveMsg);
+  form.appendChild(actions);
+  item.appendChild(form);
+
+  // ---- 变更历史（状态/批注/更新时间只增不改）----
+  if (d && Array.isArray(d.history) && d.history.length) {
+    const hist = document.createElement('details');
+    hist.className = 'disp-history';
+    const events = [...d.history].reverse();
+    hist.innerHTML = `<summary>处置记录（${d.history.length} 条）</summary><ul>` +
+      events.map((h, i) => {
+        const st = DISPOSITION_STATUS[h.status] || { label: h.status, color: '#888' };
+        const time = h.updatedAt ? new Date(h.updatedAt).toLocaleString('zh-CN') : '-';
+        const comment = h.comment
+          ? `<div class="disp-hist-comment">${escapeHtml(h.comment)}</div>`
+          : '<div class="disp-hist-comment meta">（无批注）</div>';
+        return `<li class="${i === 0 ? 'latest' : ''}">
+          <span class="disp-hist-state" style="color:${st.color}">● ${escapeHtml(st.label)}</span>
+          <span class="disp-hist-time">${escapeHtml(time)}</span>
+          ${comment}
+        </li>`;
+      }).join('') + '</ul>';
+    item.appendChild(hist);
+  }
+
+  saveBtn.onclick = async () => {
+    const statusSel = form.querySelector('.disp-status-select');
+    const commentEl = form.querySelector('.disp-comment');
+    const timeEl = form.querySelector('.disp-updated-at');
+    saveBtn.disabled = true;
+    saveMsg.textContent = '保存中…';
+    saveMsg.className = 'msg';
+    try {
+      const data = await api(`/api/analyses/${state.disposition.analysisId}/dispositions`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          pairKey: entry.pairKey,
+          status: statusSel.value,
+          comment: commentEl.value,
+          updatedAt: timeEl.value || undefined, // 操作者填写的更新时间（空则由服务端补当前时间）
+        }),
+      });
+      // 以服务端返回替换该条目并刷新汇总计数（状态数据以接口为唯一事实来源）
+      const idx = state.disposition.entries.findIndex((e) => e.pairKey === entry.pairKey);
+      if (idx >= 0) state.disposition.entries[idx] = data.entry;
+      state.disposition.summary = data.summary;
+      saveMsg.textContent = `已保存（${new Date(data.entry.disposition.updatedAt).toLocaleString('zh-CN')}）`;
+      saveMsg.className = 'msg ok';
+      renderDisposition();
+      refreshAnalyses(); // 同步左侧列表的处置进度
+    } catch (err) {
+      saveMsg.textContent = `保存失败：${err.message}`;
+      saveMsg.className = 'msg err';
+    } finally {
+      saveBtn.disabled = false;
+    }
+  };
+
+  return item;
+}
+
 // ---------- 事件绑定 ----------
 $('precheckBtn').onclick = () => runPrecheck($('geojsonInput').value.trim());
 
@@ -1193,6 +1447,18 @@ $('scheduleCloseBtn').onclick = () => {
   $('scheduleCard').hidden = true;
   state.schedule = { analysisId: null, analysisName: '', resources: [], plan: null };
 };
+
+// 冲突处置工作台
+$('dispositionCloseBtn').onclick = closeDisposition;
+document.querySelectorAll('#dispositionTabs .disposition-tab').forEach((btn) => {
+  btn.onclick = () => {
+    state.disposition.cat = btn.dataset.cat;
+    document.querySelectorAll('#dispositionTabs .disposition-tab').forEach((b) => {
+      b.classList.toggle('active', b === btn);
+    });
+    if (state.disposition.analysisId) renderDisposition();
+  };
+});
 
 // ---------- 启动 ----------
 (async function init() {
